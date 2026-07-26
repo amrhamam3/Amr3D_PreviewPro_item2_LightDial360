@@ -76,6 +76,12 @@ class GLViewerView(context: Context, attrs: AttributeSet? = null) : GLSurfaceVie
     private fun isAwaitingSecondMeasurePoint() =
         measurementModeActive && stlRenderer.getMeasurementPoints().size == 1
 
+    /** بيقلل حساسية الدوران (درجات لكل بيكسل سحب) تناسبيًا عكسيًا مع مستوى
+     * الزووم الحالي — كل ما تكبّر أكتر، الدوران يبقى أدق/أبطأ بدل حساسية ثابتة
+     * دايمًا (البند 3.2). عند scaleFactor=1 (بدون تكبير) الحساسية زي ما كانت
+     * بالظبط. حد أدنى 0.15 عشان يفضل فيه تحكم عملي حتى في أقصى تكبير (12x). */
+    private fun rotationSensitivityFactor(): Float = (1f / stlRenderer.scaleFactor).coerceIn(0.15f, 1f)
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // تجميد كامل طول ما أداة الإضاءة مفعّلة — نستهلك اللمسة من غير أي تأثير
         // على الدوران/الزووم/الـPan (البند 2.5). أداة الإضاءة نفسها (LightDialOverlayView)
@@ -138,11 +144,13 @@ class GLViewerView(context: Context, attrs: AttributeSet? = null) : GLSurfaceVie
                     stlRenderer.showPivotIndicator = false
                     // Zoom via pinch — بيفضل شغال حتى أثناء وضع القياس، لأنه فعليًا بيساعد
                     // على الدقة (تكبير المنطقة اللي المستخدم عايز يحدد نقطة فيها بيسهّل
-                    // اللمس الدقيق للتفاصيل الصغيرة، عكس الدوران اللي بس بيلخبط الاتجاه)
+                    // اللمس الدقيق للتفاصيل الصغيرة، عكس الدوران اللي بس بيلخبط الاتجاه).
+                    // بيتم حوالين نقطة تلاقي الإصبعين نفسها (مش مركز الموديل الثابت) —
+                    // البند 3.1، شوف الشرح الكامل في STLRenderer.applyPinchZoom.
                     val curSpan = currentSpan(event)
                     if (previousSpan > 10f && curSpan > 10f) {
                         val spanRatio = curSpan / previousSpan
-                        stlRenderer.scaleFactor = (stlRenderer.scaleFactor * spanRatio).coerceIn(0.1f, 12f)
+                        stlRenderer.applyPinchZoom(curX, curY, spanRatio)
                     }
                     previousSpan = curSpan
 
@@ -158,13 +166,16 @@ class GLViewerView(context: Context, attrs: AttributeSet? = null) : GLSurfaceVie
                             else -> angleDelta
                         }
                         if (abs(normAngle) > 0.3f) {
-                            stlRenderer.rotationY += normAngle * 1.5f
+                            stlRenderer.rotationY += normAngle * 1.5f * rotationSensitivityFactor()
                         }
                         previousAngle = curAngle
                     }
 
                     // Two-finger pan — يفضل شغال دايمًا (مفيد أثناء القياس كمان عشان تشوف
-                    // زاوية تانية من غير ما تدوّر الموديل فعليًا)
+                    // زاوية تانية من غير ما تدوّر الموديل فعليًا). حساسيتها متوازنة أصلاً
+                    // مع مستوى الزووم بشكل طبيعي (panScale في الرندرر مرتبط عكسيًا بـ
+                    // scaleFactor)، فبتفضل بتتبع الإصبع بنفس المعدل البصري في أي مستوى
+                    // تكبير من غير ما نحتاج نضيف تصحيح إضافي هنا.
                     stlRenderer.panX += dx * 0.003f
                     stlRenderer.panY -= dy * 0.003f
 
@@ -176,10 +187,12 @@ class GLViewerView(context: Context, attrs: AttributeSet? = null) : GLSurfaceVie
                     stlRenderer.panX += dx * panScaleTouch
                     stlRenderer.panY -= dy * panScaleTouch
                 } else {
-                    // One finger rotate
+                    // One finger rotate — حساسيتها بتقل مع الزووم العالي (البند 3.2) عشان
+                    // تحكّم أدق وقت العمل على تفاصيل صغيرة مكبّرة (زي وقت التحضير للقياس)
                     stlRenderer.showPivotIndicator = true
-                    stlRenderer.rotationY += dx * 0.5f
-                    stlRenderer.rotationX += dy * 0.5f
+                    val rotFactor = rotationSensitivityFactor()
+                    stlRenderer.rotationY += dx * 0.5f * rotFactor
+                    stlRenderer.rotationX += dy * 0.5f * rotFactor
                     stlRenderer.rotationX = stlRenderer.rotationX.coerceIn(-90f, 90f)
                 }
 
