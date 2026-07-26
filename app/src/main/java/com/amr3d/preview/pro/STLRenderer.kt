@@ -198,6 +198,49 @@ class STLRenderer : GLSurfaceView.Renderer {
      * أول ما المستخدم يلمس الشاشة عشان يدوّر يدويًا. */
     @Volatile var autoRotate = false
 
+    /**
+     * بيطبّق تغيير زووم (Pinch) حوالين نقطة معيّنة على الشاشة (نقطة تلاقي
+     * الأصابع)، بدل ما الزووم يتم دايمًا حوالين مركز الموديل الثابت (البند 3.1).
+     *
+     * ليه ده كان بج: الإسقاط Orthographic بتاعنا متماثل (Symmetric) حوالين
+     * منتصف الشاشة دايمًا — يعني تغيير scaleFactor لوحده (من غير أي لمس لـ
+     * panX/panY) بيقرّب/يبعّد كل حاجة نحو مركز الشاشة بالظبط، مش نحو مكان
+     * إصبعين المستخدم. النتيجة: أي تفصيلة المستخدم بيكبّرها بعيدة عن مركز
+     * الشاشة كانت "بتفلت" وتتحرك بعيد عن مكان لمسه فعليًا وقت الزووم — وده
+     * كان بيبان أوضح كل ما الزووم يزيد لأن أي إزاحة صغيرة عن المركز بتتكبّر
+     * بصريًا مع كل مرة يزوم فيها.
+     *
+     * الحل: نحسب رياضيًا مقدار تعديل panX/panY المطلوب عشان النقطة اللي تحت
+     * إصبعي المستخدم (نقطة التلاقي) تفضل ثابتة بصريًا في نفس مكانها بالظبط بعد
+     * تغيير الزووم — مش بس النقطة الجديدة، لازم كمان نعوّض أي Pan سابق موجود
+     * أصلاً (عشان كده المعادلة فيها panX*spanRatio مش panX ثابت). الاشتقاق
+     * الكامل اتعمل وتأكدنا منه تحليليًا (حالة خاصة: زووم بالظبط في نص الشاشة
+     * بيرجع نفس نتيجة الطريقة القديمة تمامًا، فمفيش تغيير غير متوقع في الحالة
+     * الشائعة دي).
+     *
+     * @param focalScreenX/Y إحداثيات نقطة تلاقي الإصبعين بالبيكسل (من MotionEvent مباشرة)
+     * @param spanRatio نسبة تغيّر المسافة بين الإصبعين (curSpan/previousSpan)
+     */
+    fun applyPinchZoom(focalScreenX: Float, focalScreenY: Float, spanRatio: Float) {
+        if (surfaceWidth == 0 || surfaceHeight == 0) return
+        val oldScale = scaleFactor
+        val newScale = (oldScale * spanRatio).coerceIn(0.1f, 12f)
+        if (newScale == oldScale) return
+        // النسبة الفعلية بعد الـ coerceIn ممكن تختلف شوية عن spanRatio الأصلي
+        // لو وصلنا لحد أقصى/أدنى الزووم — لازم نستخدمها هي بالظبط في المعادلة
+        val actualRatio = newScale / oldScale
+
+        val ratio = surfaceWidth.toFloat() / surfaceHeight.toFloat()
+        // تحويل نقطة اللمس من بكسلات الشاشة لإحداثيات NDC (-1..1) — إحداثي Y في
+        // اندرويد بينزل لتحت، وفي NDC بيطلع لفوق، فلازم نعكسه
+        val ndcX = (focalScreenX / surfaceWidth) * 2f - 1f
+        val ndcY = 1f - (focalScreenY / surfaceHeight) * 2f
+
+        panX = panX * actualRatio + ndcX * ratio * (1f - actualRatio)
+        panY = panY * actualRatio + ndcY * (1f - actualRatio)
+        scaleFactor = newScale
+    }
+
     // اتجاه الإضاءة - قابل للتغيير من أداة الإضاءة (LightDialOverlayView، حلقة 360°)
     @Volatile
     var lightAngle = 45f
